@@ -1,0 +1,62 @@
+Import-Module Microsoft.Graph -ErrorAction Stop
+Connect-MgGraph -Scopes "Group.Read.All"
+
+$outputFile = "C:\AllGroupsWithMembers.csv"
+$results = @()
+
+try {
+    $groups = Get-MgGroup -All
+    Write-Host "Found $($groups.Count) groups"
+} catch {
+    Write-Error "❌ Failed to retrieve groups: $_"
+    exit
+}
+
+foreach ($group in $groups) {
+    Write-Host "`n➡ Processing group: $($group.DisplayName) [$($group.Id)]"
+    $nextLink = "https://graph.microsoft.com/v1.0/groups/$($group.Id)/members"
+    $members = @()
+
+    try {
+        while ($nextLink) {
+            $response = Invoke-MgGraphRequest -Uri $nextLink -Method Get
+            $members += $response.value
+            $nextLink = $response.'@odata.nextLink'
+            Write-Host "   ↪ Retrieved $($response.value.Count) members"
+        }
+    } catch {
+        Write-Warning "⚠ Failed to retrieve members for group $($group.DisplayName): $_"
+        continue
+    }
+
+    if ($members.Count -eq 0) {
+        $results += [PSCustomObject]@{
+            GroupDisplayName   = $group.DisplayName
+            GroupId            = $group.Id
+            GroupDescription   = $group.Description
+            MemberDisplayName  = ""
+            MemberEmail        = ""
+            MemberType         = ""
+        }
+        continue
+    }
+
+    foreach ($member in $members) {
+        $results += [PSCustomObject]@{
+            GroupDisplayName   = $group.DisplayName
+            GroupId            = $group.Id
+            GroupDescription   = $group.Description
+            MemberDisplayName  = $member.DisplayName
+            MemberEmail        = $member.Mail
+            MemberType         = $member.'@odata.type' -replace '#microsoft.graph.', ''
+        }
+    }
+}
+
+Write-Host "`n💾 Writing $($results.Count) rows to CSV..."
+try {
+    $results | Export-Csv -Path $outputFile -NoTypeInformation -Encoding UTF8
+    Write-Host "✅ Done. Output saved to $outputFile"
+} catch {
+    Write-Error "❌ Failed to write to CSV: $_"
+}
